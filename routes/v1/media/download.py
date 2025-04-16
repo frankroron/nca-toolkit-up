@@ -90,11 +90,8 @@ def download_media(job_id, data):
                 'format': 'bestvideo+bestaudio/best',
                 'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
                 'merge_output_format': 'mp4',
-                'postprocessors': [{
-                    'key': 'FFmpegMerger',
-                    # Using corrected parameter name
-                    'preferredformat': 'mp4',
-                }],
+                # Removed the FFmpegMerger postprocessor that was causing the error
+                'postprocessors': [],
                 'quiet': True,
                 'no_warnings': True
             }
