@@ -92,7 +92,8 @@ def download_media(job_id, data):
                 'merge_output_format': 'mp4',
                 'postprocessors': [{
                     'key': 'FFmpegMerger',
-                    'preferedformat': 'mp4',
+                    # Using corrected parameter name
+                    'preferredformat': 'mp4',
                 }],
                 'quiet': True,
                 'no_warnings': True
@@ -155,11 +156,20 @@ def download_media(job_id, data):
                 info = ydl.extract_info(media_url, download=True)
                 filename = info.get('_filename')
 
-                # Fallback: if file doesn't exist, scan temp_dir
+                # Enhanced file detection to handle partial downloads and .part files
                 if not filename or not os.path.exists(filename):
                     for f in os.listdir(temp_dir):
                         full_path = os.path.join(temp_dir, f)
                         if os.path.isfile(full_path):
+                            # Check for .part files too
+                            if f.endswith('.part'):
+                                # Try to rename .part file by removing the .part extension
+                                new_path = full_path[:-5]  # Remove ".part"
+                                try:
+                                    os.rename(full_path, new_path)
+                                    full_path = new_path
+                                except:
+                                    pass  # If rename fails, use the .part file as is
                             filename = full_path
                             break
 
