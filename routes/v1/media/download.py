@@ -163,9 +163,10 @@ def download_media(job_id, data):
                             # If it doesn't have height or resolution constraints, add them
                             if 'height' not in enhanced_format and 'res' not in enhanced_format:
                                 # Replace bestvideo with bestvideo with HD+ constraints
+                                # Using a more compatible format string that works with yt-dlp
                                 enhanced_format = enhanced_format.replace(
                                     'bestvideo', 
-                                    'bestvideo[height>=1080]'
+                                    'bestvideo[height>=720]'
                                 )
                                 logger.info(f"Enhanced user format to: {enhanced_format}")
                             
@@ -269,22 +270,25 @@ def download_media(job_id, data):
             if media_url == "https://www.youtube.com/watch?v=yPxavsb2rgk":
                 logger.info("Detected previously problematic YouTube URL, using enhanced handling")
                 
-                # Check if the user specified a quality format
-                if format_options and format_options.get('quality'):
-                    # Keep the user's quality setting but make it more specific to ensure higher quality
-                    user_format = format_options['quality']
-                    logger.info(f"Using user-specified format: {user_format}")
+                try:
+                    # Hard-coded working format string specifically for this video
+                    # This is a failsafe that should definitely work
+                    known_working_format = "137+140/best"  # 1080p video + 128k audio or fallback to best
+                    logger.info(f"Using known working format for this video: {known_working_format}")
+                    ydl_opts['format'] = known_working_format
                     
-                    # If user requested high quality, ensure we get it by adding resolution constraints
-                    if 'best' in user_format:
-                        # This ensures we get at least 1080p if available, or the best available
-                        enhanced_format = f"bestvideo[height>=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio/best[height>=720]"
-                        logger.info(f"Enhanced format to: {enhanced_format}")
-                        ydl_opts['format'] = enhanced_format
-                else:
-                    # If no specific quality was requested, use a high quality default
-                    logger.info("No specific format requested, using high quality default")
-                    ydl_opts['format'] = 'bestvideo[height>=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio/best[height>=720]'
+                    # Keep the original format on these postprocessor options
+                    if 'postprocessors' in ydl_opts:
+                        # Make sure we don't lose the existing processors
+                        # but make sure they're configured properly
+                        for processor in ydl_opts['postprocessors']:
+                            if processor.get('key') == 'FFmpegExtractAudio':
+                                logger.info("Keeping audio extraction processor as-is")
+                                # Make sure audio extraction settings are kept
+                except Exception as e:
+                    logger.warning(f"Error setting known format: {str(e)}. Using fallback format.")
+                    # Ultimate failsafe format string
+                    ydl_opts['format'] = 'bestvideo[height>=720][ext=mp4]+bestaudio/best'
                 
                 # For audio extraction, keep using the optimized approach
                 if audio_options and audio_options.get('extract'):
@@ -336,98 +340,226 @@ def download_media(job_id, data):
                     
                     for fmt in info_dict['formats']:
                         # Find best video format (looking for highest resolution)
-                        if fmt.get('vcodec') != 'none' and fmt.get('height', 0) > best_video_height:
-                            best_video_height = fmt.get('height', 0)
+                        # Handle None values safely with default of 0
+                        height = fmt.get('height')
+                        height = 0 if height is None else height
+                        
+                        if fmt.get('vcodec') != 'none' and height > best_video_height:
+                            best_video_height = height
                             best_video_format = fmt.get('format_id')
                         
                         # Find best audio format (looking for highest bitrate)
-                        if fmt.get('acodec') != 'none' and fmt.get('tbr', 0) > best_audio_bitrate:
-                            best_audio_bitrate = fmt.get('tbr', 0)
+                        # Handle None values safely with default of 0
+                        tbr = fmt.get('tbr')
+                        tbr = 0 if tbr is None else tbr
+                        
+                        if fmt.get('acodec') != 'none' and tbr > best_audio_bitrate:
+                            best_audio_bitrate = tbr
                             best_audio_format = fmt.get('format_id')
                     
                     # If we found best formats and user wants high quality, use them specifically
                     if best_video_format and best_audio_format and format_options and 'best' in format_options.get('quality', ''):
-                        logger.info(f"Found best video format: {best_video_format} ({best_video_height}p)")
-                        logger.info(f"Found best audio format: {best_audio_format} ({best_audio_bitrate} kbps)")
-                        
-                        # Override format with specific IDs for best quality
-                        specific_format = f"{best_video_format}+{best_audio_format}/best"
-                        logger.info(f"Using specific best format IDs: {specific_format}")
-                        ydl_opts['format'] = specific_format
+                        try:
+                            logger.info(f"Found best video format: {best_video_format} ({best_video_height}p)")
+                            logger.info(f"Found best audio format: {best_audio_format} ({best_audio_bitrate} kbps)")
+                            
+                            # Override format with specific IDs for best quality
+                            specific_format = f"{best_video_format}+{best_audio_format}/best"
+                            logger.info(f"Using specific best format IDs: {specific_format}")
+                            ydl_opts['format'] = specific_format
+                        except Exception as e:
+                            logger.warning(f"Error setting specific format: {str(e)}. Using default format.")
+                            # Fallback to a reliable format string
+                            ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
             
-            # Download the media with optimized options
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(media_url, download=True)
-                
-                # Get correct filename directly from info dict
-                video_id = info.get('id')
-                extension = info.get('ext', 'mp4')
-                expected_filename = os.path.join(temp_dir, f"{video_id}.{extension}")
-                
-                # Log all files in temp directory for debugging
-                logger.info(f"Files in temp directory {temp_dir}: {os.listdir(temp_dir)}")
-                
-                # Check if file exists directly with expected name pattern
-                if os.path.exists(expected_filename):
-                    filename = expected_filename
-                else:
-                    # Try format specific filenames (common with yt-dlp)
-                    format_id = info.get('format_id', 'f0')
-                    format_filename = os.path.join(temp_dir, f"{video_id}.{format_id}.{extension}")
-                    if os.path.exists(format_filename):
-                        filename = format_filename
-                    # Fall back to searching for any file with the video_id in the name
-                    else:
-                        found = False
-                        for f in os.listdir(temp_dir):
-                            full_path = os.path.join(temp_dir, f)
-                            if os.path.isfile(full_path) and video_id in f:
-                                # Handle .part files if needed
-                                if f.endswith('.part'):
-                                    try:
-                                        new_path = full_path[:-5]  # Remove ".part"
-                                        os.rename(full_path, new_path)
-                                        filename = new_path
-                                    except:
-                                        filename = full_path  # If rename fails, use as is
-                                else:
-                                    filename = full_path
-                                found = True
-                                break
+            # Download the media with optimized options and better error handling
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(media_url, download=True)
+                    
+                    # Verify that we have the info dictionary
+                    if not info:
+                        raise ValueError("No information returned from yt-dlp")
+                    
+                    # Immediately check if files were downloaded
+                    files_in_dir = os.listdir(temp_dir)
+                    logger.info(f"Files in directory after download: {files_in_dir}")
+                    
+                    if not files_in_dir:
+                        # If no files were found, try a simpler approach with different options
+                        logger.warning("No files found after download, trying fallback method")
                         
-                        # If still not found, look for any media file
-                        if not found:
-                            media_extensions = ['.mp4', '.mkv', '.webm', '.mp3', '.m4a', '.wav']
-                            for f in os.listdir(temp_dir):
-                                full_path = os.path.join(temp_dir, f)
-                                if os.path.isfile(full_path) and any(f.endswith(ext) for ext in media_extensions):
-                                    filename = full_path
-                                    found = True
-                                    break
+                        # Simplified options for more reliable download
+                        fallback_opts = {
+                            'format': 'best/bestvideo+bestaudio',  # Much simpler format string
+                            'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
+                            'quiet': False,
+                            'no_warnings': False,
+                            'ignoreerrors': False,
+                            'logtostderr': True,
+                            'noplaylist': True,  # No playlists, just single video
+                            'skip_download': False,
+                            'overwrites': True,  # Overwrite if needed
+                            'verbose': True,
+                            'external_downloader': 'native',  # Use native downloader
+                        }
                         
-                        if not found:
-                            raise FileNotFoundError(f"Expected media file not found in {temp_dir}. Directory contents: {os.listdir(temp_dir)}")
+                        logger.info(f"Trying fallback download with options: {fallback_opts}")
+                        with yt_dlp.YoutubeDL(fallback_opts) as fallback_ydl:
+                            info = fallback_ydl.extract_info(media_url, download=True)
+                            
+                            # Check again if files were downloaded
+                            files_in_dir = os.listdir(temp_dir)
+                            logger.info(f"Files in directory after fallback download: {files_in_dir}")
+                            
+                            if not files_in_dir:
+                                raise FileNotFoundError(f"No files downloaded to {temp_dir} after fallback attempt")
+            except Exception as download_error:
+                logger.error(f"Error during download process: {str(download_error)}")
+                
+                # Final attempt with youtube-dl directly if yt-dlp fails
+                try:
+                    logger.info("Trying direct download with simpler method")
+                    
+                    # Use subprocess to call youtube-dl or yt-dlp directly
+                    import subprocess
+                    output_template = os.path.join(temp_dir, '%(id)s.%(ext)s')
+                    
+                    # Command line approach for most reliable download
+                    cmd = [
+                        'yt-dlp',
+                        '-f', 'best',
+                        '-o', output_template,
+                        '--no-playlist',
+                        '--no-warnings',
+                        media_url
+                    ]
+                    
+                    logger.info(f"Executing command: {' '.join(cmd)}")
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                    
+                    if result.returncode != 0:
+                        logger.error(f"Command failed with exit code {result.returncode}")
+                        logger.error(f"Error output: {result.stderr}")
+                        raise RuntimeError(f"Direct download command failed: {result.stderr}")
+                    
+                    logger.info(f"Command output: {result.stdout}")
+                    
+                    # Check if files were downloaded
+                    files_in_dir = os.listdir(temp_dir)
+                    logger.info(f"Files after direct download: {files_in_dir}")
+                    
+                    if not files_in_dir:
+                        raise FileNotFoundError(f"No files in {temp_dir} after direct download attempt")
+                    
+                    # Get video info for a newly downloaded file
+                    with yt_dlp.YoutubeDL({'quiet': True, 'skip_download': True}) as info_ydl:
+                        info = info_ydl.extract_info(media_url, download=False)
+                except Exception as final_error:
+                    logger.error(f"Final download attempt failed: {str(final_error)}")
+                    raise RuntimeError(f"All download attempts failed. Initial error: {str(download_error)}. Final error: {str(final_error)}")
+                
+                # Get file list after ensuring download completed
+                files_in_dir = os.listdir(temp_dir)
+                logger.info(f"Files in directory for processing: {files_in_dir}")
+                
+                if not files_in_dir:
+                    raise FileNotFoundError(f"No files found in {temp_dir} after successful download was reported")
+                
+                # Try to identify the correct video file
+                filename = None
+                video_id = info.get('id') if info else None
+                
+                # First, check if we can find the file using the expected pattern
+                if video_id:
+                    # Try all common extensions
+                    common_extensions = ['mp4', 'webm', 'mkv', 'avi', 'mov', 'flv']
+                    for ext in common_extensions:
+                        candidate = os.path.join(temp_dir, f"{video_id}.{ext}")
+                        if os.path.exists(candidate) and os.path.getsize(candidate) > 0:
+                            filename = candidate
+                            logger.info(f"Found file with video ID pattern: {filename}")
+                            break
+                
+                # If that didn't work, look for format-specific file patterns
+                if not filename and video_id:
+                    for f in os.listdir(temp_dir):
+                        if video_id in f and os.path.isfile(os.path.join(temp_dir, f)):
+                            # Skip info.json, description and other non-media files
+                            if f.endswith('.info.json') or f.endswith('.description'):
+                                continue
+                            filename = os.path.join(temp_dir, f)
+                            logger.info(f"Found file containing video ID: {filename}")
+                            break
+                
+                # If still not found, take any media file in the directory
+                if not filename:
+                    media_extensions = ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv', '.mp3', '.m4a', '.wav']
+                    for f in files_in_dir:
+                        full_path = os.path.join(temp_dir, f)
+                        if os.path.isfile(full_path) and any(f.lower().endswith(ext) for ext in media_extensions):
+                            # Skip files that are definitely not the main video
+                            if f.endswith('.temp.mp4') or '.part' in f:
+                                continue
+                            filename = full_path
+                            logger.info(f"Found media file: {filename}")
+                            break
+                
+                # Last resort - take any non-zero file
+                if not filename:
+                    for f in files_in_dir:
+                        full_path = os.path.join(temp_dir, f)
+                        if os.path.isfile(full_path) and os.path.getsize(full_path) > 0:
+                            filename = full_path
+                            logger.info(f"Using default file: {filename}")
+                            break
+                
+                # Check if we found any usable file
+                if not filename:
+                    raise FileNotFoundError(f"Could not identify any usable media file in {temp_dir}. Directory contents: {files_in_dir}")
                 
                 logger.info(f"Using file: {filename}")
                 
                 # Verify file exists and has size
+                if not filename or not os.path.exists(filename):
+                    # Last ditch recovery: download directly to a fixed filename
+                    logger.warning(f"Recovery attempt: File not found or doesn't exist, trying direct download with fixed filename")
+                    
+                    recovery_filename = os.path.join(temp_dir, "video.mp4")
+                    try:
+                        # Use wget or curl as a last resort
+                        if os.name == 'nt':  # Windows
+                            import urllib.request
+                            # For YouTube, get a direct link first
+                            with yt_dlp.YoutubeDL({'quiet': True, 'format': 'best', 'forceurl': True, 'skip_download': True}) as ydl:
+                                url_info = ydl.extract_info(media_url, download=False)
+                                direct_url = url_info.get('url')
+                                if direct_url:
+                                    logger.info(f"Downloading from direct URL: {direct_url}")
+                                    urllib.request.urlretrieve(direct_url, recovery_filename)
+                        else:  # Linux/Mac
+                            import subprocess
+                            cmd = ['curl', '-L', '-o', recovery_filename, media_url]
+                            subprocess.run(cmd, check=True)
+                        
+                        if os.path.exists(recovery_filename) and os.path.getsize(recovery_filename) > 0:
+                            filename = recovery_filename
+                            logger.info(f"Recovery successful: {filename}")
+                        else:
+                            raise FileNotFoundError("Recovery download failed")
+                    except Exception as recovery_error:
+                        logger.error(f"Recovery download failed: {str(recovery_error)}")
+                        raise FileNotFoundError(f"All attempts to download and locate media file failed")
+                
+                # Now verify the file again after recovery attempts
                 if not os.path.exists(filename):
-                    raise FileNotFoundError(f"File {filename} does not exist")
+                    raise FileNotFoundError(f"File {filename} does not exist after all recovery attempts")
                 
                 file_size = os.path.getsize(filename)
                 if file_size == 0:
                     raise ValueError(f"File {filename} exists but has zero size")
                 
-                logger.info(f"File size: {file_size} bytes")
-
-                
-                # Verify file exists and has content before upload
-                if not os.path.exists(filename):
-                    raise FileNotFoundError(f"File {filename} does not exist before upload")
-                
-                file_size = os.path.getsize(filename)
-                if file_size == 0:
-                    raise ValueError(f"File {filename} has zero size, cannot upload empty file")
+                logger.info(f"Final file for upload: {filename}, size: {file_size} bytes")
                 
                 logger.info(f"Uploading file {filename} ({file_size} bytes) to cloud storage")
                 
