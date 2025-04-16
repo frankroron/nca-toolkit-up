@@ -147,7 +147,19 @@ def download_media(job_id, data):
             # Download the media
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(media_url, download=True)
-                filename = ydl.prepare_filename(info)
+                filename = info.get('_filename')
+
+                # Fallback: if file doesn't exist, scan temp_dir
+                if not filename or not os.path.exists(filename):
+                    for f in os.listdir(temp_dir):
+                        full_path = os.path.join(temp_dir, f)
+                        if os.path.isfile(full_path):
+                            filename = full_path
+                            break
+
+                if not filename or not os.path.exists(filename):
+                    raise FileNotFoundError(f"Expected media file not found in {temp_dir}")
+
                 
                 # Upload to cloud storage
                 cloud_url = upload_file(filename)
