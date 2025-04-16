@@ -86,12 +86,18 @@ def download_media(job_id, data):
         # Create a temporary directory for downloads
         with tempfile.TemporaryDirectory() as temp_dir:
             # Configure yt-dlp options
-            ydl_opts = {
-                'format': 'best',  # Download best quality
+           ydl_opts = {
+                'format': 'bestvideo+bestaudio/best',
                 'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
+                'merge_output_format': 'mp4',
+                'postprocessors': [{
+                    'key': 'FFmpegMerger',
+                    'preferedformat': 'mp4',
+                }],
                 'quiet': True,
-                'no_warnings': True,
+                'no_warnings': True
             }
+
 
             # Add format options if specified
             if format_options:
