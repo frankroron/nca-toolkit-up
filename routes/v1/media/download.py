@@ -85,15 +85,14 @@ def download_media(job_id, data):
     try:
         # Create a temporary directory for downloads
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Configure yt-dlp options - simplified to ensure compatibility
+            # Configure yt-dlp options - focusing on reliability
             ydl_opts = {
                 'format': 'bestvideo+bestaudio/best',
-                'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
+                'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),  # Use title for more reliable file naming
+                'restrictfilenames': True,  # Restrict filenames to ASCII chars to avoid issues
+                'noplaylist': True,  # Only download single video, not playlist
                 'merge_output_format': 'mp4',
-                # Use only the essential FFmpegMerger - this is the key component for merging audio+video
-                'postprocessors': [{
-                    'key': 'FFmpegMerger',
-                }],
+                'postprocessors': [],  # We'll manually handle the file instead
                 'quiet': False,  # Enable output for debugging
                 'no_warnings': False,  # Enable warnings for debugging
                 'verbose': True  # Add verbose output for debugging
@@ -122,23 +121,20 @@ def download_media(job_id, data):
                 # Log the final format string for debugging
                 logger.info(f"Job {job_id}: Using format string: {ydl_opts.get('format')}")
 
-            # Add audio options if specified
+            # Audio extraction will be handled manually after download
+            extract_audio = False
+            audio_format = 'mp3'
+            audio_quality = '192'
+            
             if audio_options:
                 if audio_options.get('extract'):
-                    # Add FFmpegExtractAudio postprocessor for separate audio extraction
-                    audio_processor = {
-                        'key': 'FFmpegExtractAudio',
-                    }
-                    
-                    # Only add optional parameters if they are supported
+                    extract_audio = True
                     if audio_options.get('format'):
-                        audio_processor['preferredcodec'] = audio_options['format']
-                    
+                        audio_format = audio_options['format']
                     if audio_options.get('quality'):
-                        audio_processor['preferredquality'] = audio_options['quality']
+                        audio_quality = audio_options['quality']
                     
-                    ydl_opts['postprocessors'].append(audio_processor)
-                    logger.info(f"Job {job_id}: Added audio extraction with options: {audio_processor}")
+                    logger.info(f"Job {job_id}: Will extract audio after download: format={audio_format}, quality={audio_quality}")
 
             # Add thumbnail options if specified
             if thumbnail_options:
@@ -190,28 +186,32 @@ def download_media(job_id, data):
                 logger.error(f"Job {job_id}: Error during download: {str(e)}", exc_info=True)
                 raise
 
-                # Enhanced file detection to handle partial downloads, .part files, and different output formats
-                if not filename or not os.path.exists(filename):
-                    for f in os.listdir(temp_dir):
-                        full_path = os.path.join(temp_dir, f)
-                        if os.path.isfile(full_path):
-                            # Check for .part files too
-                            if f.endswith('.part'):
-                                # Try to rename .part file by removing the .part extension
-                                new_path = full_path[:-5]  # Remove ".part"
-                                try:
-                                    os.rename(full_path, new_path)
-                                    full_path = new_path
-                                except:
-                                    pass  # If rename fails, use the .part file as is
-                            
-                            # Prioritize mp4 files if we're looking for output
-                            if f.endswith('.mp4'):
-                                filename = full_path
-                                break
-                            # Otherwise take the first file we find
-                            if not filename:
-                                filename = full_path
+                # Find the downloaded file(s) and handle them
+                temp_files = os.listdir(temp_dir)
+                logger.info(f"Job {job_id}: All files after download: {temp_files}")
+                
+                # Try to find any video file (prioritize mp4)
+                mp4_files = [f for f in temp_files if f.endswith('.mp4')]
+                mkv_files = [f for f in temp_files if f.endswith('.mkv')]
+                webm_files = [f for f in temp_files if f.endswith('.webm')]
+                video_files = [f for f in temp_files if f.endswith(('.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv'))]
+                
+                if mp4_files:
+                    filename = os.path.join(temp_dir, mp4_files[0])
+                elif mkv_files:
+                    filename = os.path.join(temp_dir, mkv_files[0])
+                elif webm_files:
+                    filename = os.path.join(temp_dir, webm_files[0])
+                elif video_files:
+                    filename = os.path.join(temp_dir, video_files[0])
+                else:
+                    # If no video files found, take any file
+                    if temp_files:
+                        filename = os.path.join(temp_dir, temp_files[0])
+                    else:
+                        filename = None
+                        
+                logger.info(f"Job {job_id}: Selected file: {filename}")
 
                 if not filename or not os.path.exists(filename):
                     # List all files in the temp directory for debugging
@@ -219,14 +219,79 @@ def download_media(job_id, data):
                     logger.error(f"Job {job_id}: Expected media file not found. Files in {temp_dir}: {temp_files}")
                     raise FileNotFoundError(f"Expected media file not found in {temp_dir}")
                 else:
-                    logger.info(f"Job {job_id}: Found media file: {filename}, size: {os.path.getsize(filename)} bytes")
-
+                    # Check if the file has content
+                    file_size = os.path.getsize(filename)
+                    logger.info(f"Job {job_id}: Found media file: {filename}, size: {file_size} bytes")
+                    
+                    if file_size == 0:
+                        logger.error(f"Job {job_id}: File has zero size: {filename}")
+                        raise ValueError(f"Downloaded file has zero size: {filename}")
+                    
+                    # For video files, we should convert to ensure audio is included
+                    # This is a simple manual merge to ensure we have audio
+                    if filename.endswith(('.mp4', '.mkv', '.webm', '.avi')) and file_size > 1000:
+                        output_filename = os.path.join(temp_dir, 'output.mp4')
+                        try:
+                            import subprocess
+                            logger.info(f"Job {job_id}: Converting file to ensure audio is included...")
+                            # Use ffmpeg to convert file with audio and video tracks preserved
+                            subprocess.check_call([
+                                'ffmpeg', '-i', filename, 
+                                '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental',
+                                output_filename
+                            ], stderr=subprocess.STDOUT)
+                            
+                            if os.path.exists(output_filename) and os.path.getsize(output_filename) > 1000:
+                                old_filename = filename
+                                filename = output_filename
+                                logger.info(f"Job {job_id}: Successfully converted file to {filename}")
+                                # Remove the original file
+                                if old_filename != filename and os.path.exists(old_filename):
+                                    os.remove(old_filename)
+                        except Exception as e:
+                            logger.error(f"Job {job_id}: Error converting file: {str(e)}")
+                            # Continue with the original file if conversion fails
+                
+                # Process audio extraction if requested
+                audio_url = None
+                if extract_audio and filename and os.path.exists(filename):
+                    try:
+                        logger.info(f"Job {job_id}: Extracting audio from {filename}")
+                        audio_output = os.path.join(temp_dir, f"audio.{audio_format}")
+                        
+                        # Use ffmpeg to extract audio
+                        import subprocess
+                        cmd = [
+                            'ffmpeg', '-i', filename, 
+                            '-vn',  # No video
+                            '-acodec', 'libmp3lame' if audio_format == 'mp3' else audio_format,
+                            '-ab', f"{audio_quality}k",  # Bitrate
+                            '-ar', '44100',  # Sample rate
+                            '-y',  # Overwrite output
+                            audio_output
+                        ]
+                        logger.info(f"Job {job_id}: Running audio extraction: {' '.join(cmd)}")
+                        subprocess.check_call(cmd, stderr=subprocess.STDOUT)
+                        
+                        if os.path.exists(audio_output) and os.path.getsize(audio_output) > 0:
+                            logger.info(f"Job {job_id}: Audio extraction successful: {audio_output}")
+                            # Upload the audio file
+                            audio_url = upload_file(audio_output)
+                            logger.info(f"Job {job_id}: Audio file uploaded to {audio_url}")
+                            # Remove the temporary audio file
+                            os.remove(audio_output)
+                    except Exception as e:
+                        logger.error(f"Job {job_id}: Error extracting audio: {str(e)}", exc_info=True)
                 
                 # Upload to cloud storage
                 cloud_url = upload_file(filename)
+                logger.info(f"Job {job_id}: Video file uploaded to {cloud_url}")
                 
                 # Clean up the temporary file
-                os.remove(filename)
+                try:
+                    os.remove(filename)
+                except Exception as e:
+                    logger.warning(f"Job {job_id}: Error removing temporary file: {str(e)}")
 
                 # Prepare response
                 response = {
@@ -250,6 +315,14 @@ def download_media(job_id, data):
                         "description": info.get('description')
                     }
                 }
+                
+                # Add audio URL if it was extracted
+                if audio_url:
+                    response["audio"] = {
+                        "audio_url": audio_url,
+                        "format": audio_format,
+                        "quality": audio_quality
+                    }
 
                 # Add thumbnails if available and requested
                 if info.get('thumbnails') and thumbnail_options.get('download', False):
