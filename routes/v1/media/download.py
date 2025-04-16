@@ -90,8 +90,14 @@ def download_media(job_id, data):
                 'format': 'bestvideo+bestaudio/best',
                 'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
                 'merge_output_format': 'mp4',
-                # Removed the FFmpegMerger postprocessor that was causing the error
-                'postprocessors': [],
+                'postprocessors': [{
+                    'key': 'FFmpegVideoConvertor',
+                    'preferredformat': 'mp4',  # Fixed typo: preferedformat -> preferredformat
+                }, {
+                    # Add FFmpegMerger to ensure audio and video are merged properly
+                    'key': 'FFmpegMerger',
+                    'preferredformat': 'mp4',  # Fixed typo: preferedformat -> preferredformat
+                }],
                 'quiet': True,
                 'no_warnings': True
             }
@@ -99,28 +105,35 @@ def download_media(job_id, data):
 
             # Add format options if specified
             if format_options:
-                format_str = []
+                # If a quality string is provided directly, use it as-is
                 if format_options.get('quality'):
-                    format_str.append(format_options['quality'])
-                if format_options.get('format_id'):
-                    format_str.append(format_options['format_id'])
-                if format_options.get('resolution'):
-                    format_str.append(format_options['resolution'])
-                if format_options.get('video_codec'):
-                    format_str.append(format_options['video_codec'])
-                if format_options.get('audio_codec'):
-                    format_str.append(format_options['audio_codec'])
-                if format_str:
-                    ydl_opts['format'] = '+'.join(format_str)
+                    ydl_opts['format'] = format_options['quality']
+                else:
+                    # Otherwise, build the format string from components
+                    format_str = []
+                    if format_options.get('format_id'):
+                        format_str.append(format_options['format_id'])
+                    if format_options.get('resolution'):
+                        format_str.append(format_options['resolution'])
+                    if format_options.get('video_codec'):
+                        format_str.append(format_options['video_codec'])
+                    if format_options.get('audio_codec'):
+                        format_str.append(format_options['audio_codec'])
+                    if format_str:
+                        ydl_opts['format'] = '+'.join(format_str)
+                
+                # Log the final format string for debugging
+                logger.info(f"Job {job_id}: Using format string: {ydl_opts.get('format')}")
 
             # Add audio options if specified
             if audio_options:
                 if audio_options.get('extract'):
-                    ydl_opts['extract_audio'] = True
-                    if audio_options.get('format'):
-                        ydl_opts['audio_format'] = audio_options['format']
-                    if audio_options.get('quality'):
-                        ydl_opts['audio_quality'] = audio_options['quality']
+                    # Add FFmpegExtractAudio postprocessor for separate audio extraction
+                    ydl_opts['postprocessors'].append({
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': audio_options.get('format', 'mp3'),
+                        'preferredquality': audio_options.get('quality', '192'),
+                    })
 
             # Add thumbnail options if specified
             if thumbnail_options:
@@ -149,11 +162,13 @@ def download_media(job_id, data):
                     ydl_opts['retries'] = download_options['retries']
 
             # Download the media
+            logger.info(f"Job {job_id}: Starting download with options: {ydl_opts}")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(media_url, download=True)
                 filename = info.get('_filename')
+                logger.info(f"Job {job_id}: Download completed, reported filename: {filename}")
 
-                # Enhanced file detection to handle partial downloads and .part files
+                # Enhanced file detection to handle partial downloads, .part files, and different output formats
                 if not filename or not os.path.exists(filename):
                     for f in os.listdir(temp_dir):
                         full_path = os.path.join(temp_dir, f)
@@ -167,11 +182,22 @@ def download_media(job_id, data):
                                     full_path = new_path
                                 except:
                                     pass  # If rename fails, use the .part file as is
-                            filename = full_path
-                            break
+                            
+                            # Prioritize mp4 files if we're looking for output
+                            if f.endswith('.mp4'):
+                                filename = full_path
+                                break
+                            # Otherwise take the first file we find
+                            if not filename:
+                                filename = full_path
 
                 if not filename or not os.path.exists(filename):
+                    # List all files in the temp directory for debugging
+                    temp_files = os.listdir(temp_dir)
+                    logger.error(f"Job {job_id}: Expected media file not found. Files in {temp_dir}: {temp_files}")
                     raise FileNotFoundError(f"Expected media file not found in {temp_dir}")
+                else:
+                    logger.info(f"Job {job_id}: Found media file: {filename}, size: {os.path.getsize(filename)} bytes")
 
                 
                 # Upload to cloud storage
