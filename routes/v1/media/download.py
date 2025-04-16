@@ -90,18 +90,24 @@ def download_media(job_id, data):
                 'format': 'bestvideo+bestaudio/best',
                 'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
                 'merge_output_format': 'mp4',
-                'quiet': False,  # Enable output for debugging
+                'quiet': True,  # We'll handle our own logging
                 'no_warnings': False,  # Show warnings for debugging
-                'verbose': True,  # More verbose output
-                'progress': True,  # Show progress
+                'verbose': False,  # Disable verbose output to avoid flooding logs
+                'progress': False,  # Disable progress to avoid flooding logs
                 'prefer_ffmpeg': True,  # Prefer ffmpeg for processing
                 'writethumbnail': thumbnail_options.get('download', False),  # Add thumbnail downloading here
                 'writeinfojson': True,  # Write info json for debugging
                 'paths': {'temp': temp_dir, 'home': temp_dir},  # Ensure all paths are in our temp directory
                 'nocheckcertificate': True,  # Skip HTTPS certificate validation for problematic sites
                 'ignoreerrors': False,  # Don't ignore errors during download
-                'logtostderr': True,  # Log to stderr for debugging
+                'logtostderr': False,  # Disable logging to stderr
             }
+            
+            # Add specific retries from the request if available
+            if download_options and 'retries' in download_options:
+                retries = download_options['retries']
+                ydl_opts['retries'] = retries
+                logger.info(f"Setting retries to {retries}")
             
             # Log the temporary directory for debugging
             logger.info(f"Using temporary directory: {temp_dir}")
@@ -109,19 +115,23 @@ def download_media(job_id, data):
 
             # Add format options if specified
             if format_options:
-                format_str = []
                 if format_options.get('quality'):
-                    format_str.append(format_options['quality'])
-                if format_options.get('format_id'):
-                    format_str.append(format_options['format_id'])
-                if format_options.get('resolution'):
-                    format_str.append(format_options['resolution'])
-                if format_options.get('video_codec'):
-                    format_str.append(format_options['video_codec'])
-                if format_options.get('audio_codec'):
-                    format_str.append(format_options['audio_codec'])
-                if format_str:
-                    ydl_opts['format'] = '+'.join(format_str)
+                    # Use quality directly as it may already contain a complete format string
+                    # like 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]'
+                    ydl_opts['format'] = format_options['quality']
+                else:
+                    # Otherwise build the format string from individual components
+                    format_str = []
+                    if format_options.get('format_id'):
+                        format_str.append(format_options['format_id'])
+                    if format_options.get('resolution'):
+                        format_str.append(format_options['resolution'])
+                    if format_options.get('video_codec'):
+                        format_str.append(format_options['video_codec'])
+                    if format_options.get('audio_codec'):
+                        format_str.append(format_options['audio_codec'])
+                    if format_str:
+                        ydl_opts['format'] = '+'.join(format_str)
 
             # Add audio options if specified
             if audio_options and audio_options.get('extract'):
@@ -129,15 +139,20 @@ def download_media(job_id, data):
                 audio_format = audio_options.get('format', 'mp3')
                 audio_quality = audio_options.get('quality', '192')
                 
+                logger.info(f"Setting up audio extraction: format={audio_format}, quality={audio_quality}")
+                
                 # Add audio extraction postprocessor
                 if 'postprocessors' not in ydl_opts:
                     ydl_opts['postprocessors'] = []
                 
-                ydl_opts['postprocessors'].append({
+                # Add the audio extraction processor
+                audio_processor = {
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': audio_format,
                     'preferredquality': audio_quality,
-                })
+                }
+                
+                ydl_opts['postprocessors'].append(audio_processor)
                 
                 # Important: keep video if we're extracting audio
                 ydl_opts['keepvideo'] = True
@@ -176,7 +191,6 @@ def download_media(job_id, data):
             if not (audio_options and audio_options.get('extract') and not ydl_opts.get('keepvideo')):
                 ydl_opts['postprocessors'].append({
                     'key': 'FFmpegMerger',
-                    'ffmpeg_location': None,  # Let yt-dlp find ffmpeg automatically
                 })
 
             # Download the media
