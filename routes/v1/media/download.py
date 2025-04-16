@@ -86,7 +86,7 @@ def download_media(job_id, data):
         # Create a temporary directory for downloads
         with tempfile.TemporaryDirectory() as temp_dir:
             # Configure yt-dlp options
-           ydl_opts = {
+            ydl_opts = {
                 'format': 'bestvideo+bestaudio/best',
                 'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
                 'merge_output_format': 'mp4',
@@ -225,4 +225,4 @@ def download_media(job_id, data):
 
     except Exception as e:
         logger.error(f"Job {job_id}: Error during download process - {str(e)}")
-        return str(e), "/v1/media/download", 500 
+        return str(e), "/v1/media/download", 500
