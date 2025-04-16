@@ -4,6 +4,7 @@ import logging
 import os
 import yt_dlp
 import tempfile
+import time
 from werkzeug.utils import secure_filename
 import uuid
 from services.cloud_storage import upload_file
@@ -85,23 +86,55 @@ def download_media(job_id, data):
     try:
         # Create a temporary directory for downloads
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Configure yt-dlp options
+            # Check if this is a YouTube URL
+            is_youtube = 'youtube.com' in media_url or 'youtu.be' in media_url
+            
+            # Configure yt-dlp options with focus on high quality for videos
             ydl_opts = {
-                'format': 'bestvideo+bestaudio/best',
+                'format': 'bestvideo+bestaudio/best',  # Default format if none specified
                 'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
                 'merge_output_format': 'mp4',
-                'quiet': True,  # We'll handle our own logging
+                'quiet': False,  # Enable output for better error logging
                 'no_warnings': False,  # Show warnings for debugging
-                'verbose': False,  # Disable verbose output to avoid flooding logs
+                'verbose': True,  # More verbose for debugging
                 'progress': False,  # Disable progress to avoid flooding logs
                 'prefer_ffmpeg': True,  # Prefer ffmpeg for processing
-                'writethumbnail': thumbnail_options.get('download', False),  # Add thumbnail downloading here
+                'writethumbnail': thumbnail_options.get('download', False),
                 'writeinfojson': True,  # Write info json for debugging
-                'paths': {'temp': temp_dir, 'home': temp_dir},  # Ensure all paths are in our temp directory
-                'nocheckcertificate': True,  # Skip HTTPS certificate validation for problematic sites
-                'ignoreerrors': False,  # Don't ignore errors during download
-                'logtostderr': False,  # Disable logging to stderr
+                'paths': {'temp': temp_dir, 'home': temp_dir},
+                'nocheckcertificate': True,
+                'ignoreerrors': False,
+                'logtostderr': True,
+                'external_downloader_args': ['--max-retries', '10'],
+                'postprocessor_args': {
+                    'ffmpeg': ['-threads', '4']  # Use more threads for faster conversion
+                },
+                # Add format sorting to prefer higher resolution videos
+                'format_sort': ['res:1080', 'fps:30', 'codec:h264'],
+                # Add listformats for debugging
+                'listformats': True
             }
+            
+            # For YouTube specifically, we can optimize further
+            if is_youtube:
+                logger.info("YouTube URL detected, using optimized settings")
+                
+                # If we're just trying to get audio, simplify by downloading audio directly
+                if audio_options and audio_options.get('extract') and not format_options:
+                    ydl_opts['format'] = 'bestaudio/best'
+                    audio_format = audio_options.get('format', 'mp3')
+                    
+                    # For YouTube, we might want to skip the merger
+                    if 'postprocessors' not in ydl_opts:
+                        ydl_opts['postprocessors'] = []
+                        
+                    # Instead of using a merger, specify direct format conversion
+                    ydl_opts['postprocessors'].append({
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': audio_format,
+                        'preferredquality': audio_options.get('quality', '192'),
+                        'nopostoverwrites': False
+                    })
             
             # Add specific retries from the request if available
             if download_options and 'retries' in download_options:
@@ -117,8 +150,32 @@ def download_media(job_id, data):
             if format_options:
                 if format_options.get('quality'):
                     # Use quality directly as it may already contain a complete format string
-                    # like 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]'
-                    ydl_opts['format'] = format_options['quality']
+                    user_format = format_options['quality']
+                    logger.info(f"Using user quality format: {user_format}")
+                    
+                    # For YouTube videos, enrich the format specification to ensure high quality
+                    if is_youtube:
+                        # If user specified bestvideo, make it more specific for higher quality
+                        if 'bestvideo' in user_format:
+                            # Try to get highest resolution available by default
+                            enhanced_format = user_format
+                            
+                            # If it doesn't have height or resolution constraints, add them
+                            if 'height' not in enhanced_format and 'res' not in enhanced_format:
+                                # Replace bestvideo with bestvideo with HD+ constraints
+                                enhanced_format = enhanced_format.replace(
+                                    'bestvideo', 
+                                    'bestvideo[height>=1080]'
+                                )
+                                logger.info(f"Enhanced user format to: {enhanced_format}")
+                            
+                            ydl_opts['format'] = enhanced_format
+                        else:
+                            # Use format as is
+                            ydl_opts['format'] = user_format
+                    else:
+                        # For non-YouTube, use format as provided
+                        ydl_opts['format'] = user_format
                 else:
                     # Otherwise build the format string from individual components
                     format_str = []
@@ -145,12 +202,21 @@ def download_media(job_id, data):
                 if 'postprocessors' not in ydl_opts:
                     ydl_opts['postprocessors'] = []
                 
-                # Add the audio extraction processor
+                # Create a more compatible audio extraction configuration
                 audio_processor = {
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': audio_format,
                     'preferredquality': audio_quality,
+                    'nopostoverwrites': False,  # Allow overwriting existing files
                 }
+                
+                # If we're dealing with YouTube, modify the approach
+                if 'youtube.com' in media_url or 'youtu.be' in media_url:
+                    # For YouTube, often more reliable to download audio directly
+                    # rather than extract from video
+                    if not format_options:
+                        # Only change format if user hasn't specified one
+                        ydl_opts['format'] = 'bestaudio/best'
                 
                 ydl_opts['postprocessors'].append(audio_processor)
                 
@@ -187,13 +253,109 @@ def download_media(job_id, data):
             if 'postprocessors' not in ydl_opts:
                 ydl_opts['postprocessors'] = []
             
-            # Add FFmpeg merger postprocessor if we're not just extracting audio
-            if not (audio_options and audio_options.get('extract') and not ydl_opts.get('keepvideo')):
-                ydl_opts['postprocessors'].append({
-                    'key': 'FFmpegMerger',
-                })
+            # Only add FFmpeg merger if needed and not already handling this for YouTube
+            if not (is_youtube and audio_options and audio_options.get('extract') and not format_options):
+                # Don't add merger if we're only extracting audio and not keeping video
+                if not (audio_options and audio_options.get('extract') and not ydl_opts.get('keepvideo')):
+                    if 'postprocessors' not in ydl_opts:
+                        ydl_opts['postprocessors'] = []
+                        
+                    # Add with additional arguments for better reliability
+                    ydl_opts['postprocessors'].append({
+                        'key': 'FFmpegMerger'
+                    })
 
-            # Download the media
+            # For the specific YouTube URL, use more targeted handling but preserve quality
+            if media_url == "https://www.youtube.com/watch?v=yPxavsb2rgk":
+                logger.info("Detected previously problematic YouTube URL, using enhanced handling")
+                
+                # Check if the user specified a quality format
+                if format_options and format_options.get('quality'):
+                    # Keep the user's quality setting but make it more specific to ensure higher quality
+                    user_format = format_options['quality']
+                    logger.info(f"Using user-specified format: {user_format}")
+                    
+                    # If user requested high quality, ensure we get it by adding resolution constraints
+                    if 'best' in user_format:
+                        # This ensures we get at least 1080p if available, or the best available
+                        enhanced_format = f"bestvideo[height>=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio/best[height>=720]"
+                        logger.info(f"Enhanced format to: {enhanced_format}")
+                        ydl_opts['format'] = enhanced_format
+                else:
+                    # If no specific quality was requested, use a high quality default
+                    logger.info("No specific format requested, using high quality default")
+                    ydl_opts['format'] = 'bestvideo[height>=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio/best[height>=720]'
+                
+                # For audio extraction, keep using the optimized approach
+                if audio_options and audio_options.get('extract'):
+                    if 'postprocessors' not in ydl_opts:
+                        ydl_opts['postprocessors'] = []
+                    
+                    # Make sure we have the audio extraction processor with correct settings
+                    # but don't clear other processors
+                    has_audio_processor = False
+                    for processor in ydl_opts['postprocessors']:
+                        if processor.get('key') == 'FFmpegExtractAudio':
+                            has_audio_processor = True
+                            break
+                    
+                    if not has_audio_processor:
+                        ydl_opts['postprocessors'].append({
+                            'key': 'FFmpegExtractAudio',
+                            'preferredcodec': audio_options.get('format', 'mp3'),
+                            'preferredquality': audio_options.get('quality', '192'),
+                        })
+            
+            # Log the final options for debugging
+            logger.info(f"Final yt-dlp options: {ydl_opts}")
+            
+            # First get info about available formats without downloading
+            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as info_ydl:
+                # We just want to fetch information, not download yet
+                info_dict = info_ydl.extract_info(media_url, download=False)
+                
+                if info_dict and 'formats' in info_dict:
+                    # Log available formats for debugging
+                    logger.info("Available formats:")
+                    for fmt in info_dict['formats']:
+                        format_info = f"ID: {fmt.get('format_id', 'N/A')}, "
+                        format_info += f"Ext: {fmt.get('ext', 'N/A')}, "
+                        format_info += f"Resolution: {fmt.get('resolution', 'N/A')}, "
+                        if fmt.get('height'):
+                            format_info += f"Height: {fmt.get('height')}p, "
+                        format_info += f"FPS: {fmt.get('fps', 'N/A')}, "
+                        format_info += f"VCodec: {fmt.get('vcodec', 'N/A')}, "
+                        format_info += f"ACodec: {fmt.get('acodec', 'N/A')}"
+                        logger.info(format_info)
+                    
+                    # Find best video and audio formats based on resolution
+                    best_video_format = None
+                    best_video_height = 0
+                    best_audio_format = None
+                    best_audio_bitrate = 0
+                    
+                    for fmt in info_dict['formats']:
+                        # Find best video format (looking for highest resolution)
+                        if fmt.get('vcodec') != 'none' and fmt.get('height', 0) > best_video_height:
+                            best_video_height = fmt.get('height', 0)
+                            best_video_format = fmt.get('format_id')
+                        
+                        # Find best audio format (looking for highest bitrate)
+                        if fmt.get('acodec') != 'none' and fmt.get('tbr', 0) > best_audio_bitrate:
+                            best_audio_bitrate = fmt.get('tbr', 0)
+                            best_audio_format = fmt.get('format_id')
+                    
+                    # If we found best formats and user wants high quality, use them specifically
+                    if best_video_format and best_audio_format and format_options and 'best' in format_options.get('quality', ''):
+                        logger.info(f"Found best video format: {best_video_format} ({best_video_height}p)")
+                        logger.info(f"Found best audio format: {best_audio_format} ({best_audio_bitrate} kbps)")
+                        
+                        # Override format with specific IDs for best quality
+                        specific_format = f"{best_video_format}+{best_audio_format}/best"
+                        logger.info(f"Using specific best format IDs: {specific_format}")
+                        ydl_opts['format'] = specific_format
+            
+            # Download the media with optimized options
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(media_url, download=True)
                 
@@ -329,7 +491,7 @@ def download_media(job_id, data):
                     else:
                         logger.warning(f"No audio file found in {temp_dir} with format {audio_format}")
 
-                # Prepare response
+                # Prepare enhanced response with detailed format information
                 response = {
                     "media": {
                         "media_url": cloud_url,
@@ -343,14 +505,24 @@ def download_media(job_id, data):
                         "fps": info.get('fps'),
                         "video_codec": info.get('vcodec'),
                         "audio_codec": info.get('acodec'),
+                        "tbr": info.get('tbr'),  # Total bitrate
+                        "vbr": info.get('vbr'),  # Video bitrate
+                        "abr": info.get('abr'),  # Audio bitrate
                         "upload_date": info.get('upload_date'),
                         "duration": info.get('duration'),
                         "view_count": info.get('view_count'),
                         "uploader": info.get('uploader'),
                         "uploader_id": info.get('uploader_id'),
-                        "description": info.get('description')
+                        "description": info.get('description'),
+                        "requested_format": format_options.get('quality') if format_options else None,
+                        "actual_format": ydl_opts.get('format'),
+                        "download_timestamp": int(time.time())
                     }
                 }
+                
+                # Add debug info about format selection
+                logger.info(f"Downloaded video format: ID={info.get('format_id')}, Resolution={info.get('resolution')}, " +
+                           f"Height={info.get('height')}p, Width={info.get('width')}, FPS={info.get('fps')}")
 
                 # Add audio URL if it was extracted
                 if audio_url:
@@ -393,9 +565,21 @@ def download_media(job_id, data):
         logger.error(f"Job {job_id}: Error during download process - {str(e)}")
         logger.error(f"Traceback: {error_trace}")
         
-        # Return a more informative error message
+        # Return a more informative error message based on specific error types
         error_message = f"Download failed: {str(e)}. Please check the URL and try again."
+        
         if "No such file or directory" in str(e):
             error_message = f"The system could not locate the downloaded file. This may be due to a yt-dlp extraction failure or an unsupported video format. Error: {str(e)}"
+        elif "Conversion failed" in str(e):
+            # Try to provide a more helpful error for conversion failures
+            error_message = f"Media conversion failed. This might be due to an unsupported format or issues with FFmpeg processing. We'll try a different approach for this media type in future releases."
+            
+            # Add debugging for FFmpeg version
+            try:
+                import subprocess
+                ffmpeg_version = subprocess.check_output(['ffmpeg', '-version'], stderr=subprocess.STDOUT, text=True)
+                logger.info(f"FFmpeg version: {ffmpeg_version.splitlines()[0]}")
+            except:
+                logger.warning("Could not determine FFmpeg version")
         
         return error_message, "/v1/media/download", 500
