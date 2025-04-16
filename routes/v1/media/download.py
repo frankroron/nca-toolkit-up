@@ -136,12 +136,57 @@ def download_media(job_id, data):
         elif format_options and format_options.get('quality'):
             logger.info(f"Using specified quality: {format_options.get('quality')}")
             ydl_opts['format'] = format_options.get('quality')
+            
+            # Important: We still need to set merge format for combined formats
+            if '+' in format_options.get('quality'):
+                logger.info("Format contains a merge specification, setting merge_output_format")
+                ydl_opts['merge_output_format'] = 'mp4'
+                
+            # Handle both video download and audio extraction
+            if extract_audio:
+                logger.info("Adding audio extraction processor alongside video download")
+                audio_format = audio_options.get('format', 'mp3')
+                audio_quality = audio_options.get('quality', '192')
+                
+                # Need to ensure we're keeping the video
+                ydl_opts['keepvideo'] = True
+                
+                # Add audio extraction postprocessor
+                if 'postprocessors' not in ydl_opts:
+                    ydl_opts['postprocessors'] = []
+                    
+                ydl_opts['postprocessors'].append({
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': audio_format,
+                    'preferredquality': audio_quality,
+                    'nopostoverwrites': False
+                })
         else:
             logger.info("Using best video+audio format")
             ydl_opts['format'] = 'bestvideo+bestaudio/best'
             ydl_opts['merge_output_format'] = 'mp4'
+            
+            # Handle audio extraction if requested
+            if extract_audio:
+                logger.info("Adding audio extraction with default video")
+                audio_format = audio_options.get('format', 'mp3')
+                audio_quality = audio_options.get('quality', '192')
+                
+                # Need to ensure we're keeping the video
+                ydl_opts['keepvideo'] = True
+                
+                # Add audio extraction postprocessor
+                if 'postprocessors' not in ydl_opts:
+                    ydl_opts['postprocessors'] = []
+                    
+                ydl_opts['postprocessors'].append({
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': audio_format,
+                    'preferredquality': audio_quality,
+                    'nopostoverwrites': False
+                })
         
-        # STEP 4: Create a hook to monitor the download process
+        # STEP 4: Create hooks to monitor the download and postprocessing
         downloaded_files = []
         
         def download_hook(d):
@@ -149,7 +194,18 @@ def download_media(job_id, data):
                 logger.info(f"Download finished: {d['filename']}")
                 downloaded_files.append(d['filename'])
                 
+        def postprocess_hook(d):
+            if d.get('status') == 'finished':
+                logger.info(f"Postprocessing finished: {d.get('info_dict', {}).get('filepath')}")
+                if 'destination' in d and d['destination']:
+                    logger.info(f"Postprocessed file destination: {d['destination']}")
+                    downloaded_files.append(d['destination'])
+                elif 'filepath' in d and d['filepath']:
+                    logger.info(f"Postprocessed file path: {d['filepath']}")
+                    downloaded_files.append(d['filepath'])
+                    
         ydl_opts['progress_hooks'] = [download_hook]
+        ydl_opts['postprocessor_hooks'] = [postprocess_hook]
         
         # STEP 5: First attempt - standard download with yt-dlp
         logger.info("Starting download with yt-dlp...")
@@ -273,16 +329,51 @@ def download_media(job_id, data):
             if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
                 file_ext = os.path.splitext(filepath)[1].lower()
                 
-                # For audio extraction, look for audio file
-                if extract_audio and file_ext in ['.mp3', '.m4a', '.wav', '.aac', '.opus', '.flac']:
-                    if not audio_file:
-                        audio_file = filepath
-                        logger.info(f"Found audio file: {audio_file}")
-                # Otherwise grab the video file
-                elif file_ext in ['.mp4', '.webm', '.mkv', '.mov', '.avi', '.flv']:
+                # Check for video files first
+                if file_ext in ['.mp4', '.webm', '.mkv', '.mov', '.avi', '.flv']:
                     if not video_file:
                         video_file = filepath
                         logger.info(f"Found video file: {video_file}")
+                        
+                # Then look for audio files from extraction
+                elif file_ext in ['.mp3', '.m4a', '.wav', '.aac', '.opus', '.flac']:
+                    if not audio_file and (file_ext == f'.{audio_options.get("format", "mp3")}' or not extract_audio):
+                        # Prioritize the requested format
+                        audio_file = filepath
+                        logger.info(f"Found audio file: {audio_file}")
+                    elif not audio_file:
+                        # Fallback to any audio file
+                        audio_file = filepath
+                        logger.info(f"Found fallback audio file: {audio_file}")
+                        
+        # Special case: if we have a .m4a file but requested mp3 and no mp3 was found
+        if extract_audio and audio_options.get('format', 'mp3') == 'mp3' and not audio_file:
+            for filepath in downloaded_files:
+                if os.path.exists(filepath) and filepath.endswith('.m4a'):
+                    logger.info(f"Found .m4a file but mp3 was requested. Converting manually.")
+                    try:
+                        # Try to convert it manually
+                        import subprocess
+                        m4a_file = filepath
+                        mp3_file = os.path.splitext(filepath)[0] + '.mp3'
+                        
+                        cmd = [
+                            'ffmpeg',
+                            '-i', m4a_file,
+                            '-codec:a', 'libmp3lame',
+                            '-q:a', audio_options.get('quality', '192').replace('k', ''),
+                            mp3_file
+                        ]
+                        
+                        logger.info(f"Running FFmpeg command: {' '.join(cmd)}")
+                        subprocess.run(cmd, check=True)
+                        
+                        if os.path.exists(mp3_file) and os.path.getsize(mp3_file) > 0:
+                            audio_file = mp3_file
+                            logger.info(f"Manual conversion successful: {audio_file}")
+                            
+                    except Exception as conv_error:
+                        logger.error(f"Manual conversion failed: {str(conv_error)}")
             
         # If we didn't find specific file types, just take the first non-empty file
         if not video_file and not audio_file and downloaded_files:
