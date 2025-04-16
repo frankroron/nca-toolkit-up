@@ -373,6 +373,10 @@ def download_media(job_id, data):
                             ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
             
             # Download the media with optimized options and better error handling
+            # Initialize info at the beginning to avoid UnboundLocalError
+            info = None
+            filename = None
+            
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(media_url, download=True)
@@ -470,6 +474,17 @@ def download_media(job_id, data):
                 filename = None
                 video_id = info.get('id') if info else None
                 
+                # Safety check for info object
+                if not info:
+                    logger.warning("Info dictionary is empty or None. Attempting to infer values from downloaded files.")
+                    # Try to build a minimal info dictionary to use later
+                    info = {
+                        'id': 'unknown',
+                        'title': 'Unknown Title',
+                        'ext': 'mp4',
+                        'format_id': 'unknown'
+                    }
+                
                 # First, check if we can find the file using the expected pattern
                 if video_id:
                     # Try all common extensions
@@ -564,12 +579,46 @@ def download_media(job_id, data):
                 logger.info(f"Uploading file {filename} ({file_size} bytes) to cloud storage")
                 
                 try:
-                    # Upload to cloud storage
-                    cloud_url = upload_file(filename)
-                    logger.info(f"Upload successful: {cloud_url}")
+                    # Verify the file exists before trying to upload
+                    if not os.path.exists(filename):
+                        raise FileNotFoundError(f"File disappeared before upload: {filename}")
+                        
+                    # Get additional file information
+                    import stat
+                    file_stat = os.stat(filename)
+                    file_mode = file_stat.st_mode
+                    logger.info(f"File permissions: {stat.filemode(file_mode)}")
                     
-                    # Clean up the temporary file only after successful upload
-                    os.remove(filename)
+                    # Ensure the file is readable
+                    if not os.access(filename, os.R_OK):
+                        logger.warning(f"File not readable: {filename}, attempting to fix permissions")
+                        try:
+                            # Try to make it readable
+                            os.chmod(filename, file_mode | stat.S_IRUSR)
+                        except Exception as perm_error:
+                            logger.error(f"Failed to adjust permissions: {str(perm_error)}")
+                    
+                    # Upload to cloud storage with additional error handling
+                    try:
+                        cloud_url = upload_file(filename)
+                        logger.info(f"Upload successful: {cloud_url}")
+                        
+                        # Clean up the temporary file only after successful upload
+                        os.remove(filename)
+                    except Exception as upload_error:
+                        logger.error(f"Initial upload failed: {str(upload_error)}")
+                        
+                        # Before retrying, check if file is still valid
+                        if os.path.exists(filename) and os.path.getsize(filename) > 0:
+                            # Try upload again with a delay
+                            time.sleep(1)
+                            cloud_url = upload_file(filename)
+                            logger.info(f"Retry upload successful: {cloud_url}")
+                            
+                            # Clean up after successful retry
+                            os.remove(filename)
+                        else:
+                            raise FileNotFoundError(f"File invalid before retry: {filename}")
                 except Exception as e:
                     logger.error(f"Upload failed: {str(e)}")
                     # If we have the info json, include it in the error
@@ -623,31 +672,36 @@ def download_media(job_id, data):
                     else:
                         logger.warning(f"No audio file found in {temp_dir} with format {audio_format}")
 
-                # Prepare enhanced response with detailed format information
+                # Make sure we have cloud_url
+                if not locals().get('cloud_url'):
+                    logger.error("cloud_url variable not set before response construction")
+                    raise RuntimeError("Media upload process did not complete successfully")
+                    
+                # Prepare enhanced response with detailed format information - safely handling missing values
                 response = {
                     "media": {
                         "media_url": cloud_url,
-                        "title": info.get('title'),
-                        "format_id": info.get('format_id'),
-                        "ext": info.get('ext'),
-                        "resolution": info.get('resolution'),
-                        "filesize": info.get('filesize'),
-                        "width": info.get('width'),
-                        "height": info.get('height'),
-                        "fps": info.get('fps'),
-                        "video_codec": info.get('vcodec'),
-                        "audio_codec": info.get('acodec'),
-                        "tbr": info.get('tbr'),  # Total bitrate
-                        "vbr": info.get('vbr'),  # Video bitrate
-                        "abr": info.get('abr'),  # Audio bitrate
-                        "upload_date": info.get('upload_date'),
-                        "duration": info.get('duration'),
-                        "view_count": info.get('view_count'),
-                        "uploader": info.get('uploader'),
-                        "uploader_id": info.get('uploader_id'),
-                        "description": info.get('description'),
+                        "title": info.get('title', 'Unknown Title'),
+                        "format_id": info.get('format_id', 'unknown'),
+                        "ext": info.get('ext', 'mp4'),
+                        "resolution": info.get('resolution', 'unknown'),
+                        "filesize": info.get('filesize', os.path.getsize(filename) if 'filename' in locals() and filename and os.path.exists(filename) else 0),
+                        "width": info.get('width', 0),
+                        "height": info.get('height', 0),
+                        "fps": info.get('fps', 0),
+                        "video_codec": info.get('vcodec', 'unknown'),
+                        "audio_codec": info.get('acodec', 'unknown'),
+                        "tbr": info.get('tbr', 0),  # Total bitrate
+                        "vbr": info.get('vbr', 0),  # Video bitrate
+                        "abr": info.get('abr', 0),  # Audio bitrate
+                        "upload_date": info.get('upload_date', ''),
+                        "duration": info.get('duration', 0),
+                        "view_count": info.get('view_count', 0),
+                        "uploader": info.get('uploader', 'unknown'),
+                        "uploader_id": info.get('uploader_id', 'unknown'),
+                        "description": info.get('description', ''),
                         "requested_format": format_options.get('quality') if format_options else None,
-                        "actual_format": ydl_opts.get('format'),
+                        "actual_format": ydl_opts.get('format', 'unknown'),
                         "download_timestamp": int(time.time())
                     }
                 }
