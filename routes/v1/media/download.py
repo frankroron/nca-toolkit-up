@@ -85,21 +85,18 @@ def download_media(job_id, data):
     try:
         # Create a temporary directory for downloads
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Configure yt-dlp options
+            # Configure yt-dlp options - simplified to ensure compatibility
             ydl_opts = {
                 'format': 'bestvideo+bestaudio/best',
                 'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
                 'merge_output_format': 'mp4',
+                # Use only the essential FFmpegMerger - this is the key component for merging audio+video
                 'postprocessors': [{
-                    'key': 'FFmpegVideoConvertor',
-                    'preferredformat': 'mp4',  # Fixed typo: preferedformat -> preferredformat
-                }, {
-                    # Add FFmpegMerger to ensure audio and video are merged properly
                     'key': 'FFmpegMerger',
-                    'preferredformat': 'mp4',  # Fixed typo: preferedformat -> preferredformat
                 }],
-                'quiet': True,
-                'no_warnings': True
+                'quiet': False,  # Enable output for debugging
+                'no_warnings': False,  # Enable warnings for debugging
+                'verbose': True  # Add verbose output for debugging
             }
 
 
@@ -129,11 +126,19 @@ def download_media(job_id, data):
             if audio_options:
                 if audio_options.get('extract'):
                     # Add FFmpegExtractAudio postprocessor for separate audio extraction
-                    ydl_opts['postprocessors'].append({
+                    audio_processor = {
                         'key': 'FFmpegExtractAudio',
-                        'preferredcodec': audio_options.get('format', 'mp3'),
-                        'preferredquality': audio_options.get('quality', '192'),
-                    })
+                    }
+                    
+                    # Only add optional parameters if they are supported
+                    if audio_options.get('format'):
+                        audio_processor['preferredcodec'] = audio_options['format']
+                    
+                    if audio_options.get('quality'):
+                        audio_processor['preferredquality'] = audio_options['quality']
+                    
+                    ydl_opts['postprocessors'].append(audio_processor)
+                    logger.info(f"Job {job_id}: Added audio extraction with options: {audio_processor}")
 
             # Add thumbnail options if specified
             if thumbnail_options:
@@ -163,10 +168,27 @@ def download_media(job_id, data):
 
             # Download the media
             logger.info(f"Job {job_id}: Starting download with options: {ydl_opts}")
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(media_url, download=True)
-                filename = info.get('_filename')
-                logger.info(f"Job {job_id}: Download completed, reported filename: {filename}")
+            try:
+                # Log all files in temp directory before download
+                logger.info(f"Job {job_id}: Files in temp directory before download: {os.listdir(temp_dir)}")
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(media_url, download=True)
+                    filename = info.get('_filename')
+                    logger.info(f"Job {job_id}: Download completed, reported filename: {filename}")
+                    
+                    # Enhanced info logging
+                    logger.info(f"Job {job_id}: Video info: format={info.get('format')}, "
+                               f"format_id={info.get('format_id')}, "
+                               f"ext={info.get('ext')}, "
+                               f"acodec={info.get('acodec')}, "
+                               f"vcodec={info.get('vcodec')}")
+                
+                # Log all files in temp directory after download
+                logger.info(f"Job {job_id}: Files in temp directory after download: {os.listdir(temp_dir)}")
+            except Exception as e:
+                logger.error(f"Job {job_id}: Error during download: {str(e)}", exc_info=True)
+                raise
 
                 # Enhanced file detection to handle partial downloads, .part files, and different output formats
                 if not filename or not os.path.exists(filename):
