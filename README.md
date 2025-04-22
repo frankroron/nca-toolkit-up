@@ -59,16 +59,13 @@ Each endpoint is supported by robust payload validation and detailed API documen
 
 ### Media
 
-- **[`/v1/media/convert`](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/media_convert.md)**
+- **[`/v1/media/convert`](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/media/convert/media_convert.md)**
   - Converts media files from one format to another with customizable codec options.
-
-- **[`/v1/media/convert/media`](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/media/convert/media_convert.md)**
-  - Advanced media conversion with customizable video and audio codec options.
 
 - **[`/v1/media/convert/mp3`](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/media/convert/media_to_mp3.md)**
   - Converts various media formats specifically to MP3 audio.
 
-- **[`/v1/media/download`](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/media/download.md)**
+- **[`/v1/BETA/media/download`](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/media/download.md)**
   - Downloads media content from various online sources using yt-dlp.
 
 - **[`/v1/media/feedback`](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/media/feedback.md)**
@@ -167,13 +164,6 @@ Each endpoint is supported by robust payload validation and detailed API documen
 
 ---
 
-### Storage Configuration
-
-#### `LOCAL_STORAGE_PATH`
-- **Purpose**: Directory for temporary file storage during processing.
-- **Default**: /tmp
-- **Recommendation**: Set to a path with sufficient disk space for your expected workloads.
-
 ### Performance Tuning Variables
 
 #### `MAX_QUEUE_LENGTH`
@@ -191,6 +181,15 @@ Each endpoint is supported by robust payload validation and detailed API documen
 - **Default**: 30
 - **Recommendation**: Increase for processing large media files (e.g., 300-600).
 
+---
+
+### Storage Configuration
+
+#### `LOCAL_STORAGE_PATH`
+- **Purpose**: Directory for temporary file storage during processing.
+- **Default**: /tmp
+- **Recommendation**: Set to a path with sufficient disk space for your expected workloads.
+
 ### Notes
 - Ensure all required environment variables are set based on the storage provider in use (GCP or S3-compatible). 
 - Missing any required variables will result in errors during runtime.
@@ -206,6 +205,7 @@ Each endpoint is supported by robust payload validation and detailed API documen
      # Cloud storage provider (choose one)
      -e GCP_SA_CREDENTIALS='{"your":"service_account_json"}' \
      -e GCP_BUCKET_NAME=your_gcs_bucket_name \
+
      # Or
      -e S3_ENDPOINT_URL=https://nyc3.digitaloceanspaces.com \
      -e S3_ACCESS_KEY=your_access_key \
@@ -230,8 +230,8 @@ Each endpoint is supported by robust payload validation and detailed API documen
 
 This API can be deployed to various cloud platforms:
 
-- [Google Cloud Platform (GCP) Installation Guide](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/cloud-installation/gcp.md) - Deploy the API on Google Cloud Run
 - [Digital Ocean Installation Guide](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/cloud-installation/do.md) - Deploy the API on Digital Ocean App Platform
+- [Google Cloud Platform (GCP) Installation Guide](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/cloud-installation/gcp.md) - Deploy the API on Google Cloud Run
 
 ## Testing the API
 
