@@ -77,6 +77,9 @@ Each endpoint is supported by robust payload validation and detailed API documen
 - **[`/v1/media/silence`](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/media/silence.md)**
   - Detects silence intervals in a given media file.
 
+- **[`/v1/media/metadata`](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/media/metadata.md)**
+  - Extracts comprehensive metadata from media files including format, codecs, resolution, and bitrates.
+
 ### S3
 
 - **[`/v1/s3/upload`](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/s3/upload.md)**
@@ -89,6 +92,12 @@ Each endpoint is supported by robust payload validation and detailed API documen
 
 - **[`/v1/toolkit/test`](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/toolkit/test.md)**
   - Verifies that the NCA Toolkit API is properly installed and functioning.
+
+- **[`/v1/toolkit/job/status`](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/toolkit/job_status.md)**
+  - Retrieves the status of a specific job by its ID.
+
+- **[`/v1/toolkit/jobs/status`](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/toolkit/jobs_status.md)**
+  - Retrieves the status of all jobs within a specified time range.
 
 ### Video
 
@@ -128,19 +137,7 @@ Each endpoint is supported by robust payload validation and detailed API documen
 
 ---
 
-### Google Cloud Platform (GCP) Environment Variables
-
-#### `GCP_SA_CREDENTIALS`
-- **Purpose**: The JSON credentials for the GCP Service Account.
-- **Requirement**: Mandatory if using GCP storage.
-
-#### `GCP_BUCKET_NAME`
-- **Purpose**: The name of the GCP storage bucket.
-- **Requirement**: Mandatory if using GCP storage.
-
----
-
-### S3-Compatible Storage Environment Variable
+### S3-Compatible Storage Environment Variables
 
 #### `S3_ENDPOINT_URL`
 - **Purpose**: Endpoint URL for the S3-compatible service.
@@ -161,6 +158,18 @@ Each endpoint is supported by robust payload validation and detailed API documen
 #### `S3_REGION`
 - **Purpose**: The region for the S3-compatible storage service.
 - **Requirement**: Mandatory if using S3-compatible storage, "None" is acceptible for some s3 providers.
+
+---
+
+### Google Cloud Storage (GCP) Environment Variables
+
+#### `GCP_SA_CREDENTIALS`
+- **Purpose**: The JSON credentials for the GCP Service Account.
+- **Requirement**: Mandatory if using GCP storage.
+
+#### `GCP_BUCKET_NAME`
+- **Purpose**: The name of the GCP storage bucket.
+- **Requirement**: Mandatory if using GCP storage.
 
 ---
 
@@ -203,15 +212,21 @@ Each endpoint is supported by robust payload validation and detailed API documen
      -e API_KEY=your_api_key \
      
      # Cloud storage provider (choose one)
-     -e GCP_SA_CREDENTIALS='{"your":"service_account_json"}' \
-     -e GCP_BUCKET_NAME=your_gcs_bucket_name \
+
+     # s3
+     #
+     #-e S3_ENDPOINT_URL=https://nyc3.digitaloceanspaces.com \
+     #-e S3_ACCESS_KEY=your_access_key \
+     #-e S3_SECRET_KEY=your_secret_key \
+     #-e S3_BUCKET_NAME=your_bucket_name \
+     #-e S3_REGION=nyc3 \
 
      # Or
-     -e S3_ENDPOINT_URL=https://nyc3.digitaloceanspaces.com \
-     -e S3_ACCESS_KEY=your_access_key \
-     -e S3_SECRET_KEY=your_secret_key \
-     -e S3_BUCKET_NAME=your_bucket_name \
-     -e S3_REGION=nyc3 \
+
+     # GCP Storage
+     #
+     #-e GCP_SA_CREDENTIALS='{"your":"service_account_json"}' \
+     #-e GCP_BUCKET_NAME=your_gcs_bucket_name \
      
      # Local storage configuration (optional)
      -e LOCAL_STORAGE_PATH=/tmp \
@@ -230,8 +245,43 @@ Each endpoint is supported by robust payload validation and detailed API documen
 
 This API can be deployed to various cloud platforms:
 
-- [Digital Ocean Installation Guide](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/cloud-installation/do.md) - Deploy the API on Digital Ocean App Platform
-- [Google Cloud Platform (GCP) Installation Guide](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/cloud-installation/gcp.md) - Deploy the API on Google Cloud Run
+### Digital Ocean
+
+The Digital Ocean App platform is pretty easy to set up and get going, but it can cost more then other cloud providers.
+
+#### Important: Long running processes
+
+You need to use the "webhook_url" (for any request that exceeds 1 min) in your API payload to avoid timeouts due to CloudFlair proxy timeout.
+
+If you use the webhook_url, there is no limit to the processing length.
+
+- [Digital Ocean App Platform Installation Guide](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/cloud-installation/do.md) - Deploy the API on Digital Ocean App Platform
+
+### Google Cloud RUN Platform
+
+Sometimes difficult for people to install (especially on Google Business Workspaces), lots of detailed security exceptions.
+
+However this is one of the cheapest options with great performance because you're only charged when the NCA Toolkit is processesing a request.
+
+Outside of that you are not charged.
+
+#### Imporatnt: Requests exceeding 5+ minutes can be problemactic 
+
+GCP Run will terminate long rununing processes, which can happen when processing larger files (whether you use the webhook_url or not).
+
+However, when your processing times are consistant lower than 5 minutes (e.g. you're only process smaller files), it works great! The performance is also great and as soon as you stop making requests you stop paying.
+
+They also have a GPU option that might be usable for better performance (untested).
+
+- [Google Cloud RUN Platform (GCP) Installation Guide](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docs/cloud-installation/gcp.md) - Deploy the API on Google Cloud Run
+
+### General Docker Instructions
+
+You can use these instructions to deploy the NCA Toolkit to any linux server (on any platform)
+
+You can more easily control performance and cost this way, but requires more technical skill to get up and running (not much though).
+
+- [General Docker Compose Installation Guide](https://github.com/stephengpope/no-code-architects-toolkit/blob/main/docker-compose.md)
 
 ## Testing the API
 
