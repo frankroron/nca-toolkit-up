@@ -285,7 +285,7 @@ You can more easily control performance and cost this way, but requires more tec
 
 ## Testing the API
 
-1. Install the **[Postman Template](https://bit.ly/49Gkhl)** on your computer
+1. Install the **[Postman Template](https://bit.ly/49Gkh61)** on your computer
 2. Import the API example requests from the template
 3. Configure your environment variables in Postman:
    - `base_url`: Your deployed API URL
@@ -308,6 +308,10 @@ We welcome contributions from the public! If you'd like to contribute to this pr
 
 1. Ensure any install or build dependencies are removed before the end of the layer when doing a build.
 2. Update the README.md with details of changes to the interface, this includes new environment variables, exposed ports, useful file locations and container parameters.
+
+### Adding New Routes
+
+If you want to add new API endpoints, check out our [Adding Routes Guide](docs/adding_routes.md) to learn how to use the dynamic route registration system.
 
 Thank you for your contributions!
 
